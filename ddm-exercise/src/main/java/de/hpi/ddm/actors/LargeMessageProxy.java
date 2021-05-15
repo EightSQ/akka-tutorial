@@ -1,22 +1,20 @@
 package de.hpi.ddm.actors;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.CompletionStage;
+import java.util.zip.DeflaterOutputStream;
+import java.util.zip.InflaterOutputStream;
 
 import akka.NotUsed;
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.ActorSelection;
 import akka.actor.Props;
+import akka.stream.*;
+import akka.stream.javadsl.*;
 import akka.util.ByteString;
-import akka.stream.Materializer;
-import akka.stream.SourceRef;
-import akka.stream.javadsl.Sink;
-import akka.stream.javadsl.Source;
-import akka.stream.javadsl.StreamRefs;
 import de.hpi.ddm.singletons.KryoPoolSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -29,7 +27,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	////////////////////////
 
 	public static final String DEFAULT_NAME = "largeMessageProxy";
-	private static final int chunkLength = 8192;
+	private static final int chunkLength = 65536;
 
 	public static Props props() {
 		return Props.create(LargeMessageProxy.class);
@@ -46,27 +44,18 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		private ActorRef receiver;
 	}
 
-	/*@Data @NoArgsConstructor @AllArgsConstructor
-	public static class BytesMessage<T> implements Serializable {
-		private static final long serialVersionUID = 4057807743872319842L;
-		private T bytes;
-		private ActorRef sender;
-		private ActorRef receiver;
-	} */
-
 	@Data @AllArgsConstructor
 	public static class MessageOffer {
-		final SourceRef<byte[]> sourceRef;
+		final SourceRef<ByteString> sourceRef;
 		private ActorRef sender;
 		private ActorRef receiver;
-		private int numberOfChunks;
 	}
 
 
 	/////////////////
 	// Actor State //
 	/////////////////
-	Materializer mat = Materializer.matFromSystem(this.getContext().getSystem());
+	private Materializer mat = Materializer.matFromSystem(this.getContext().getSystem());
 
 	/////////////////////
 	// Actor Lifecycle //
@@ -81,7 +70,6 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		return receiveBuilder()
 				.match(LargeMessage.class, this::handle)
 				.match(MessageOffer.class, this::handle)
-				//.match(BytesMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -106,39 +94,75 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// - If you serialize a message manually and send it, it will, of course, be serialized again by Akka's message passing subsystem.
 		// - But: Good, language-dependent serializers (such as kryo) are aware of byte arrays so that their serialization is very effective w.r.t. serialization time and size of serialized data.
 
+		byte[] serializedMessage = compress(KryoPoolSingleton.get().toBytesWithClass(message));
 
-		byte[] serializedMessage = KryoPoolSingleton.get().toBytesWithClass(message); // TODO: Compression!
-
-		List<byte[]> chunks = new ArrayList<byte[]>();
-		for (int chunkStart = 0; chunkStart < serializedMessage.length; chunkStart += chunkLength) {
-			int chunkEnd = Math.min(chunkStart + chunkLength, serializedMessage.length);
-			chunks.add(Arrays.copyOfRange(serializedMessage, chunkStart, chunkEnd));
+		if (serializedMessage != null) {
+			ByteArrayInputStream serializedStream = new ByteArrayInputStream(serializedMessage);
+			Source<ByteString, CompletionStage<IOResult>> source = StreamConverters.fromInputStream(() -> serializedStream, chunkLength);
+			SourceRef<ByteString> sourceRef = source.runWith(StreamRefs.sourceRef(), this.mat);
+			receiverProxy.tell(new MessageOffer(sourceRef, sender, receiver), this.getSelf());
+		} else {
+			this.log().error("Could not compress message.");
 		}
-
-		Source<byte[], NotUsed> source = Source.from(chunks);
-		SourceRef<byte[]> sourceRef = source.runWith(StreamRefs.sourceRef(), mat);
-
-		// Send StreamRef to receiver
-		receiverProxy.tell(new MessageOffer(sourceRef, sender, receiver, chunks.size()), this.getSelf());
 	}
 
 	private void handle(MessageOffer messageOffer) {
 		// get SourceRef out of MessageOffer
-        SourceRef<byte[]> sourceRef = messageOffer.sourceRef;
-		Source<byte[], NotUsed> source = sourceRef.getSource();
+        SourceRef<ByteString> sourceRef = messageOffer.sourceRef;
+		Source<ByteString, NotUsed> source = sourceRef.getSource();
 
-        // read stream data (until stream closed)
-		//byte[] messageBytes = new byte[messageOffer.getNumberOfChunks() * chunkLength]; // TODO: Maybe this breaks, maybe we need the exact message length, so Kryo doesn't get confused
-		//ByteBuffer result = ByteBuffer.wrap(messageBytes);
+        // create a sink
+		Sink<ByteString, CompletionStage<ByteString>> sink = Sink.<ByteString, ByteString>fold(ByteString.empty(), ByteString::concat);
 
-		Sink<byte[], CompletionStage<ByteString>> sink = Sink.<ByteString, byte[]>fold(ByteString.empty(), (aggr, next) -> aggr.concat(ByteString.fromArray(next)));
-		source.runWith(sink, mat).whenCompleteAsync((byteString, throwable) -> {
+		// and drain the source into it
+		source.runWith(sink, this.mat).whenCompleteAsync((byteString, throwable) -> {
 			// decompress/deserialize
-			Object unpackedMessage = KryoPoolSingleton.get().fromBytes(byteString.toArray());
+			byte[] decompressedMessage = decompress(byteString.toArray());
 
-			// send the unpacked message to the real receiver
-			messageOffer.getReceiver().tell(unpackedMessage, messageOffer.getSender());
+            if (decompressedMessage != null) {
+				Object unpackedMessage = KryoPoolSingleton.get().fromBytes(decompressedMessage);
+
+				// send the unpacked message to the real receiver
+				messageOffer.getReceiver().tell(unpackedMessage, messageOffer.getSender());
+			} else {
+				this.log().error("Could not decompress message.");
+			}
 		});
-
 	}
+
+	///////////////////////
+	// COMPRESSION UTILS //
+	///////////////////////
+
+	private byte[] compress(byte[] in) {
+		try {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			DeflaterOutputStream defl = new DeflaterOutputStream(out);
+			defl.write(in);
+			defl.flush();
+			defl.close();
+
+			return out.toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+	private byte[] decompress(byte[] in) {
+		try {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			InflaterOutputStream infl = new InflaterOutputStream(out);
+			infl.write(in);
+			infl.flush();
+			infl.close();
+
+			return out.toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+
 }
