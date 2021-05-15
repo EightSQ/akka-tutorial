@@ -1,16 +1,17 @@
 package de.hpi.ddm.actors;
 
 import java.io.Serializable;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 
 import akka.NotUsed;
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.ActorSelection;
 import akka.actor.Props;
+import akka.util.ByteString;
 import akka.stream.Materializer;
 import akka.stream.SourceRef;
 import akka.stream.javadsl.Sink;
@@ -65,7 +66,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	/////////////////
 	// Actor State //
 	/////////////////
-	static Materializer mat = null; // just like https://github.com/akka/akka/blob/v2.6.14/akka-docs/src/test/java/jdocs/stream/FlowStreamRefsDocTest.java#L34-L66
+	Materializer mat = Materializer.matFromSystem(this.getContext().getSystem());
 
 	/////////////////////
 	// Actor Lifecycle //
@@ -105,6 +106,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// - If you serialize a message manually and send it, it will, of course, be serialized again by Akka's message passing subsystem.
 		// - But: Good, language-dependent serializers (such as kryo) are aware of byte arrays so that their serialization is very effective w.r.t. serialization time and size of serialized data.
 
+
 		byte[] serializedMessage = KryoPoolSingleton.get().toBytesWithClass(message); // TODO: Compression!
 
 		List<byte[]> chunks = new ArrayList<byte[]>();
@@ -126,16 +128,17 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		Source<byte[], NotUsed> source = sourceRef.getSource();
 
         // read stream data (until stream closed)
-		byte[] messageBytes = new byte[messageOffer.getNumberOfChunks() * chunkLength]; // TODO: Maybe this breaks, maybe we need the exact message length, so Kryo doesn't get confused
-		ByteBuffer result = ByteBuffer.wrap(messageBytes);
+		//byte[] messageBytes = new byte[messageOffer.getNumberOfChunks() * chunkLength]; // TODO: Maybe this breaks, maybe we need the exact message length, so Kryo doesn't get confused
+		//ByteBuffer result = ByteBuffer.wrap(messageBytes);
 
-		source.runWith(Sink.foreach(chunk -> result.put((byte[]) chunk)), mat);
+		Sink<byte[], CompletionStage<ByteString>> sink = Sink.<ByteString, byte[]>fold(ByteString.empty(), (aggr, next) -> aggr.concat(ByteString.fromArray(next)));
+		source.runWith(sink, mat).whenCompleteAsync((byteString, throwable) -> {
+			// decompress/deserialize
+			Object unpackedMessage = KryoPoolSingleton.get().fromBytes(byteString.toArray());
 
-		// decompress/deserialize
-		Object unpackedMessage = KryoPoolSingleton.get().fromBytes(messageBytes);
-
-		// send the unpacked message to the real receiver
-		messageOffer.getReceiver().tell(unpackedMessage, messageOffer.getSender());
+			// send the unpacked message to the real receiver
+			messageOffer.getReceiver().tell(unpackedMessage, messageOffer.getSender());
+		});
 
 	}
 }
