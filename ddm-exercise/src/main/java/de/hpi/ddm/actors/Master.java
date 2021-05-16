@@ -33,6 +33,8 @@ public class Master extends AbstractLoggingActor {
 		this.workers = new ArrayList<>();
 		this.largeMessageProxy = this.context().actorOf(LargeMessageProxy.props(), LargeMessageProxy.DEFAULT_NAME);
 		this.welcomeData = welcomeData;
+		this.inputBuffer = new ArrayList<String[]>();
+		this.inputDone = false;
 	}
 
 	////////////////////
@@ -54,7 +56,44 @@ public class Master extends AbstractLoggingActor {
 	public static class RegistrationMessage implements Serializable {
 		private static final long serialVersionUID = 3303081601659723997L;
 	}
-	
+
+	@Data @NoArgsConstructor
+	public static class RequestWorkMessage implements Serializable {
+		private static final long serialVersionUID = 9201291601659723997L;
+	}
+
+	@Data @AllArgsConstructor
+	public static class HintFoundMessage implements Serializable {
+		private static final long serialVersionUID = 3302081601059923997L;
+		private byte[] shaHash;
+		private String hint;
+	}
+
+	@Data @AllArgsConstructor
+	public static class PasswordFoundMessage implements Serializable {
+		private static final long serialVersionUID = 3384529601659723997L;
+		private byte[] shaHash;
+		private String password;
+	}
+
+	@Data @AllArgsConstructor
+	public static class NowWorkingOnHintMessage implements Serializable {
+		private static final long serialVersionUID = 3384529601629839237L;
+		private ActorRef worker;
+		private String nextPermutation;
+		private long areaLength;
+		private long hashesPerSecond;
+	}
+
+	@Data @AllArgsConstructor
+	public static class NowWorkingOnPasswordMessage implements Serializable {
+		private static final long serialVersionUID = 3384529601629839237L;
+		private ActorRef worker;
+		private String nextPermutation;
+		private long areaLength;
+		private long hashesPerSecond;
+	}
+
 	/////////////////
 	// Actor State //
 	/////////////////
@@ -64,6 +103,9 @@ public class Master extends AbstractLoggingActor {
 	private final List<ActorRef> workers;
 	private final ActorRef largeMessageProxy;
 	private final BloomFilter welcomeData;
+
+	private List<String[]> inputBuffer;
+	private Boolean inputDone;
 
 	private long startTime;
 	
@@ -114,22 +156,23 @@ public class Master extends AbstractLoggingActor {
 		// b) Memory reduction: If the batches are processed sequentially, the memory consumption can be kept constant; if the entire input is read into main memory, the memory consumption scales at least linearly with the input size.
 		// - It is your choice, how and if you want to make use of the batched inputs. Simply aggregate all batches in the Master and start the processing afterwards, if you wish.
 
-		// TODO: Stop fetching lines from the Reader once an empty BatchMessage was received; we have seen all data then
-		if (message.getLines().isEmpty()) {
-			this.terminate();
-			return;
+		if (this.inputDone) return;
+		if (message.getLines().isEmpty()) this.inputDone = true;
+		
+		this.inputBuffer.addAll(message.getLines());
+		if (this.inputBuffer.size() < 300 && !this.inputDone) { // TODO: Criterion for bufferin input, e.g. just 2 GB of data or so, instead of 300 lines
+			// Fetch further lines from the Reader
+			this.reader.tell(new Reader.ReadMessage(), this.self());
+		} else {
+			// Create hint cracking packages, we'll request new input if this.workDone == false, as soon as we have received all passwords in the future
+			this.distributeHints();
 		}
-		
-		// TODO: Process the lines with the help of the worker actors
-		for (String[] line : message.getLines())
-			this.log().error("Need help processing: {}", Arrays.toString(line));
-		
-		// TODO: Send (partial) results to the Collector
-		this.collector.tell(new Collector.CollectMessage("If I had results, this would be one."), this.self());
-		
-		// TODO: Fetch further lines from the Reader
-		this.reader.tell(new Reader.ReadMessage(), this.self());
-		
+	}
+	
+	protected void distributeHints() {
+		for (String[] line : this.inputBuffer) {
+
+		}
 	}
 	
 	protected void terminate() {

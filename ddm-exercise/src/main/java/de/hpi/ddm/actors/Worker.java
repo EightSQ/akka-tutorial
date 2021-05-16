@@ -48,7 +48,35 @@ public class Worker extends AbstractLoggingActor {
 		private static final long serialVersionUID = 8343040942748609598L;
 		private BloomFilter welcomeData;
 	}
-	
+
+	@Data @NoArgsConstructor
+	public static class WorkShiftMessage implements Serializable {
+		private static final long serialVersionUID = -349283922748609598L;
+	}
+
+	@Data @AllArgsConstructor
+	public static class HintWorkMessage implements Serializable {
+		private String alphabet;
+		// "hashtable"
+		private String nextPermutation;
+		private long areaLength;
+	}
+
+	@Data @AllArgsConstructor
+	public static class CrackWorkMessage implements Serializable {
+		private String alphabet;
+		private long passwordLength;
+		private String passwordHash;
+		private String nextPermutation;
+		private long areaLength;
+	}
+
+	@Data @AllArgsConstructor
+	public static class WorkThiefMessage implements Serializable {
+		private static final long serialVersionUID = 8343040942748609598L;
+		private ActorRef thief;
+	}
+
 	/////////////////
 	// Actor State //
 	/////////////////
