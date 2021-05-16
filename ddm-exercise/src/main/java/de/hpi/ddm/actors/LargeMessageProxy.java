@@ -1,11 +1,21 @@
 package de.hpi.ddm.actors;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Serializable;
+import java.util.concurrent.CompletionStage;
+import java.util.zip.DeflaterOutputStream;
+import java.util.zip.InflaterOutputStream;
 
+import akka.NotUsed;
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.ActorSelection;
 import akka.actor.Props;
+import akka.stream.*;
+import akka.stream.javadsl.*;
+import akka.util.ByteString;
+import de.hpi.ddm.singletons.KryoPoolSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -17,7 +27,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	////////////////////////
 
 	public static final String DEFAULT_NAME = "largeMessageProxy";
-	
+	private static final int chunkLength = 65536;
+
 	public static Props props() {
 		return Props.create(LargeMessageProxy.class);
 	}
@@ -33,18 +44,19 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		private ActorRef receiver;
 	}
 
-	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class BytesMessage<T> implements Serializable {
-		private static final long serialVersionUID = 4057807743872319842L;
-		private T bytes;
+	@Data @AllArgsConstructor
+	public static class MessageOffer {
+		final SourceRef<ByteString> sourceRef;
 		private ActorRef sender;
 		private ActorRef receiver;
 	}
-	
+
+
 	/////////////////
 	// Actor State //
 	/////////////////
-	
+	private Materializer mat = Materializer.matFromSystem(this.getContext().getSystem());
+
 	/////////////////////
 	// Actor Lifecycle //
 	/////////////////////
@@ -57,12 +69,13 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	public Receive createReceive() {
 		return receiveBuilder()
 				.match(LargeMessage.class, this::handle)
-				.match(BytesMessage.class, this::handle)
+				.match(MessageOffer.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
 
 	private void handle(LargeMessage<?> largeMessage) {
+
 		Object message = largeMessage.getMessage();
 		ActorRef sender = this.sender();
 		ActorRef receiver = largeMessage.getReceiver();
@@ -80,12 +93,76 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// - To split an object, serialize it into a byte array and then send the byte array range-by-range (tip: try "KryoPoolSingleton.get()").
 		// - If you serialize a message manually and send it, it will, of course, be serialized again by Akka's message passing subsystem.
 		// - But: Good, language-dependent serializers (such as kryo) are aware of byte arrays so that their serialization is very effective w.r.t. serialization time and size of serialized data.
-		receiverProxy.tell(new BytesMessage<>(message, sender, receiver), this.self());
+
+		byte[] serializedMessage = compress(KryoPoolSingleton.get().toBytesWithClass(message));
+
+		if (serializedMessage != null) {
+			ByteArrayInputStream serializedStream = new ByteArrayInputStream(serializedMessage);
+			Source<ByteString, CompletionStage<IOResult>> source = StreamConverters.fromInputStream(() -> serializedStream, chunkLength);
+			SourceRef<ByteString> sourceRef = source.runWith(StreamRefs.sourceRef(), this.mat);
+			receiverProxy.tell(new MessageOffer(sourceRef, sender, receiver), this.getSelf());
+		} else {
+			this.log().error("Could not compress message.");
+		}
 	}
 
-	private void handle(BytesMessage<?> message) {
-		// TODO: With option a): Store the message, ask for the next chunk and, if all chunks are present, reassemble the message's content, deserialize it and pass it to the receiver.
-		// The following code assumes that the transmitted bytes are the original message, which they shouldn't be in your proper implementation ;-)
-		message.getReceiver().tell(message.getBytes(), message.getSender());
+	private void handle(MessageOffer messageOffer) {
+		// get SourceRef out of MessageOffer
+        SourceRef<ByteString> sourceRef = messageOffer.sourceRef;
+		Source<ByteString, NotUsed> source = sourceRef.getSource();
+
+        // create a sink
+		Sink<ByteString, CompletionStage<ByteString>> sink = Sink.<ByteString, ByteString>fold(ByteString.empty(), ByteString::concat);
+
+		// and drain the source into it
+		source.runWith(sink, this.mat).whenCompleteAsync((byteString, throwable) -> {
+			// decompress/deserialize
+			byte[] decompressedMessage = decompress(byteString.toArray());
+
+            if (decompressedMessage != null) {
+				Object unpackedMessage = KryoPoolSingleton.get().fromBytes(decompressedMessage);
+
+				// send the unpacked message to the real receiver
+				messageOffer.getReceiver().tell(unpackedMessage, messageOffer.getSender());
+			} else {
+				this.log().error("Could not decompress message.");
+			}
+		});
 	}
+
+	///////////////////////
+	// COMPRESSION UTILS //
+	///////////////////////
+
+	private byte[] compress(byte[] in) {
+		try {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			DeflaterOutputStream defl = new DeflaterOutputStream(out);
+			defl.write(in);
+			defl.flush();
+			defl.close();
+
+			return out.toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+	private byte[] decompress(byte[] in) {
+		try {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			InflaterOutputStream infl = new InflaterOutputStream(out);
+			infl.write(in);
+			infl.flush();
+			infl.close();
+
+			return out.toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+
 }
