@@ -1,15 +1,10 @@
 package de.hpi.ddm.actors;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.nio.ByteBuffer;
+import java.util.*;
 
-import akka.actor.AbstractLoggingActor;
-import akka.actor.ActorRef;
-import akka.actor.PoisonPill;
-import akka.actor.Props;
-import akka.actor.Terminated;
+import akka.actor.*;
 import de.hpi.ddm.structures.BloomFilter;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -33,8 +28,9 @@ public class Master extends AbstractLoggingActor {
 		this.workers = new ArrayList<>();
 		this.largeMessageProxy = this.context().actorOf(LargeMessageProxy.props(), LargeMessageProxy.DEFAULT_NAME);
 		this.welcomeData = welcomeData;
-		this.inputBuffer = new ArrayList<String[]>();
+		this.inputBuffer = new ArrayList<>();
 		this.inputDone = false;
+		this.hintHashes = new HashSet<>();
 	}
 
 	////////////////////
@@ -45,7 +41,7 @@ public class Master extends AbstractLoggingActor {
 	public static class StartMessage implements Serializable {
 		private static final long serialVersionUID = -50374816448627600L;
 	}
-	
+
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class BatchMessage implements Serializable {
 		private static final long serialVersionUID = 8343040942748609598L;
@@ -79,8 +75,7 @@ public class Master extends AbstractLoggingActor {
 	@Data @AllArgsConstructor
 	public static class NowWorkingOnHintMessage implements Serializable {
 		private static final long serialVersionUID = 3384529601629839237L;
-		private ActorRef worker;
-		private String nextPermutation;
+		private long nextPermutation;
 		private long areaLength;
 		private long hashesPerSecond;
 	}
@@ -88,8 +83,7 @@ public class Master extends AbstractLoggingActor {
 	@Data @AllArgsConstructor
 	public static class NowWorkingOnPasswordMessage implements Serializable {
 		private static final long serialVersionUID = 3384529601629839237L;
-		private ActorRef worker;
-		private String nextPermutation;
+		private long nextPermutation;
 		private long areaLength;
 		private long hashesPerSecond;
 	}
@@ -104,8 +98,12 @@ public class Master extends AbstractLoggingActor {
 	private final ActorRef largeMessageProxy;
 	private final BloomFilter welcomeData;
 
+	private List<String> tableColumns;
 	private List<String[]> inputBuffer;
 	private Boolean inputDone;
+	HashSet<ByteBuffer> hintHashes;
+
+	private HashMap<Address, ActorRef> responsibleWorkers;
 
 	private long startTime;
 	
@@ -129,7 +127,11 @@ public class Master extends AbstractLoggingActor {
 				.match(BatchMessage.class, this::handle)
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
-				// TODO: Add further messages here to share work between Master and Worker actors
+				.match(RequestWorkMessage.class, this::handle)
+				.match(HintFoundMessage.class, this::handle)
+				.match(PasswordFoundMessage.class, this::handle)
+				.match(NowWorkingOnHintMessage.class, this::handle)
+				.match(NowWorkingOnPasswordMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -141,7 +143,6 @@ public class Master extends AbstractLoggingActor {
 	}
 	
 	protected void handle(BatchMessage message) {
-		
 		// TODO: This is where the task begins:
 		// - The Master received the first batch of input records.
 		// - To receive the next batch, we need to send another ReadMessage to the reader.
@@ -165,14 +166,57 @@ public class Master extends AbstractLoggingActor {
 			this.reader.tell(new Reader.ReadMessage(), this.self());
 		} else {
 			// Create hint cracking packages, we'll request new input if this.workDone == false, as soon as we have received all passwords in the future
+			this.parseInputBuffer();
 			this.distributeHints();
+			this.startHintCracking();
 		}
 	}
-	
-	protected void distributeHints() {
-		for (String[] line : this.inputBuffer) {
 
+	protected void handle(RequestWorkMessage message) {
+
+	}
+	
+	protected void handle(HintFoundMessage message) {
+
+	}
+
+	protected void handle(PasswordFoundMessage message) {
+
+	}
+
+	protected void handle(NowWorkingOnHintMessage message) {
+
+	}
+
+	protected void handle(NowWorkingOnPasswordMessage message) {
+
+	}
+
+	protected void parseInputBuffer() {
+		// Parse inputBuffer into HashSet (and also parseWords)
+		for (String[] line : this.inputBuffer) {
+			String id = line[0];
+			String name = line[1];
+			String alphabet = line[2];
+			Long len = Long.parseLong(line[3]);
+			String passwordHash = line[4];
+			// TODO: passwordHash and aHintHash to ByteBuffer
+			// TODO: Versionize all of this (we might read multiple batches)
+			for (int i = 5; i < line.length; i++) {
+				String aHintHash = line[i];
+			}
 		}
+	}
+
+	protected void distributeHints() {
+		// Send HashSet to one worker per ActorSystem via LargeMessageProxy. These distribute the HashSet then internally without the LMP?
+		for (ActorRef localMaster : this.responsibleWorkers.values()) {
+			this.largeMessageProxy.tell(new LargeMessageProxy.LargeMessage<>(new Worker.HashSetDistributionMessage(this.hintHashes), localMaster), this.self());
+		}
+	}
+
+	protected void startHintCracking() {
+		// TODO
 	}
 	
 	protected void terminate() {
@@ -195,14 +239,27 @@ public class Master extends AbstractLoggingActor {
 	protected void handle(RegistrationMessage message) {
 		this.context().watch(this.sender());
 		this.workers.add(this.sender());
-		this.log().info("Registered {}", this.sender());
-		
-		this.largeMessageProxy.tell(new LargeMessageProxy.LargeMessage<>(new Worker.WelcomeMessage(this.welcomeData), this.sender()), this.self());
-		
+
+		ActorRef localMaster;
+		// if we don't know this ActorSystem (represented by an Address) yet
+		if (!this.responsibleWorkers.containsKey(this.sender().path().address())) {
+			this.responsibleWorkers.put(this.sender().path().address(), this.sender());
+			this.log().info("Registered {} as master worker for system {}", this.sender(), this.sender().path().address());
+			localMaster = this.sender();
+		} else {
+			this.log().info("Registered {} as slave worker for system {}", this.sender(), this.sender().path().address());
+			localMaster = this.responsibleWorkers.get(this.sender().path().address());
+		}
+
+		this.sender().tell(new Worker.WelcomeMessage(localMaster), this.self());
+
 		// TODO: Assign some work to registering workers. Note that the processing of the global task might have already started.
+		// we need to think about how we deal with already started work...
 	}
 	
 	protected void handle(Terminated message) {
+		// TODO: Deal with local master death
+
 		this.context().unwatch(message.getActor());
 		this.workers.remove(message.getActor());
 		this.log().info("Unregistered {}", message.getActor());

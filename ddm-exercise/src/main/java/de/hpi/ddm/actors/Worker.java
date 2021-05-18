@@ -2,8 +2,11 @@ package de.hpi.ddm.actors;
 
 import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
+import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
 
 import akka.actor.AbstractLoggingActor;
@@ -27,7 +30,7 @@ public class Worker extends AbstractLoggingActor {
 	////////////////////////
 	// Actor Construction //
 	////////////////////////
-	
+
 	public static final String DEFAULT_NAME = "worker";
 
 	public static Props props() {
@@ -37,44 +40,65 @@ public class Worker extends AbstractLoggingActor {
 	public Worker() {
 		this.cluster = Cluster.get(this.context().system());
 		this.largeMessageProxy = this.context().actorOf(LargeMessageProxy.props(), LargeMessageProxy.DEFAULT_NAME);
+		this.wantedHashes = null;
+		this.workType = WorkType.NO_WORK;
 	}
-	
+
 	////////////////////
 	// Actor Messages //
 	////////////////////
 
-	@Data @NoArgsConstructor @AllArgsConstructor
+	@Data
+	@NoArgsConstructor
+	@AllArgsConstructor
 	public static class WelcomeMessage implements Serializable {
 		private static final long serialVersionUID = 8343040942748609598L;
-		private BloomFilter welcomeData;
+		private ActorRef localMaster;
 	}
 
-	@Data @NoArgsConstructor
+	@Data
+	@NoArgsConstructor
 	public static class WorkShiftMessage implements Serializable {
 		private static final long serialVersionUID = -349283922748609598L;
 	}
 
-	@Data @AllArgsConstructor
+	@Data
+	@AllArgsConstructor
 	public static class HintWorkMessage implements Serializable {
+		private static final long serialVersionUID = 1129302748609598L;
 		private String alphabet;
-		// "hashtable"
-		private String nextPermutation;
+		private long nextPermutation;
 		private long areaLength;
 	}
 
-	@Data @AllArgsConstructor
+	@Data
+	@AllArgsConstructor
 	public static class CrackWorkMessage implements Serializable {
+		private static final long serialVersionUID = 2812990118248609598L;
 		private String alphabet;
 		private long passwordLength;
-		private String passwordHash;
-		private String nextPermutation;
+		private ByteBuffer passwordHash;
+		private long nextCombination;
 		private long areaLength;
 	}
 
-	@Data @AllArgsConstructor
+	@Data
+	@AllArgsConstructor
 	public static class WorkThiefMessage implements Serializable {
 		private static final long serialVersionUID = 8343040942748609598L;
 		private ActorRef thief;
+	}
+
+	@Data
+	@NoArgsConstructor
+	public static class RequestHashSetMessage implements Serializable {
+		private static final long serialVersionUID = 2039203942748609598L;
+	}
+
+	@Data @AllArgsConstructor
+	public static class HashSetDistributionMessage implements Serializable {
+		private static final long serialVersionUID = 2039203942748609598L;
+		HashSet<ByteBuffer> hashes;
 	}
 
 	/////////////////
@@ -85,7 +109,26 @@ public class Worker extends AbstractLoggingActor {
 	private final Cluster cluster;
 	private final ActorRef largeMessageProxy;
 	private long registrationTime;
-	
+	private ActorRef localMaster;
+
+	public enum WorkType {
+		NO_WORK, HINT, PASSWORD
+	}
+
+	// Both Passwords and Hints
+	private WorkType workType;
+	private String alphabet;
+	private long areaLength;
+
+	// Only Hints
+	private long nextPermutation;
+	private HashSet<ByteBuffer> wantedHashes;
+
+	// Only Passwords
+	private long nextCombination;
+	private ByteBuffer passwordHash;
+	private long passwordLength;
+
 	/////////////////////
 	// Actor Lifecycle //
 	/////////////////////
@@ -113,7 +156,12 @@ public class Worker extends AbstractLoggingActor {
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
 				.match(WelcomeMessage.class, this::handle)
-				// TODO: Add further messages here to share work between Master and Worker actors
+				.match(WorkShiftMessage.class, this::handle)
+				.match(HintWorkMessage.class, this::handle)
+				.match(CrackWorkMessage.class, this::handle)
+				.match(WorkThiefMessage.class, this::handle)
+				.match(RequestHashSetMessage.class, this::handle)
+				.match(HashSetDistributionMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -148,9 +196,90 @@ public class Worker extends AbstractLoggingActor {
 	
 	private void handle(WelcomeMessage message) {
 		final long transmissionTime = System.currentTimeMillis() - this.registrationTime;
-		this.log().info("WelcomeMessage with " + message.getWelcomeData().getSizeInMB() + " MB data received in " + transmissionTime + " ms.");
+		this.localMaster = message.getLocalMaster();
 	}
-	
+
+	private void handle(HintWorkMessage message) {
+		this.workType = WorkType.HINT;
+		this.alphabet = message.getAlphabet();
+		this.areaLength = message.getAreaLength();
+		this.nextPermutation = message.getNextPermutation();
+
+		if (this.wantedHashes == null) {
+			this.localMaster.tell(new RequestHashSetMessage(), this.self());
+		} else {
+			this.self().tell(new WorkShiftMessage(), this.self());
+		}
+	}
+
+	private void handle(RequestHashSetMessage message) {
+		if (this.wantedHashes != null) {
+			this.sender().tell(new HashSetDistributionMessage(this.wantedHashes), this.self());
+		} else {
+			this.context().system().scheduler().scheduleOnce(
+				Duration.ofMillis(100), this.self(), message, this.context().system().dispatcher(), this.sender()
+			);
+		}
+	}
+
+	private void handle(HashSetDistributionMessage message) {
+		this.wantedHashes = message.getHashes();
+		this.self().tell(new WorkShiftMessage(), this.self());
+	}
+
+	private void handle(CrackWorkMessage message) {
+		this.workType = WorkType.PASSWORD;
+		this.alphabet = message.getAlphabet();
+		this.passwordLength = message.getPasswordLength();
+		this.passwordHash = message.getPasswordHash();
+		this.nextCombination = message.getNextCombination();
+		this.areaLength = message.getAreaLength();
+
+		this.self().tell(new WorkShiftMessage(), this.self());
+	}
+
+	private static final long workShiftLength = 100000; // TODO: Change this to seconds/milliseconds
+	private static final long workShiftStealMultiplyer = 1;
+	private void handle(WorkShiftMessage message) {
+		// TODO do actual cracking work
+		// TODO: while time spent < time budget for shift
+		switch (this.workType) {
+			case HINT:
+				// TODO stuff
+			case PASSWORD:
+				// TODO password cracking
+			case NO_WORK:
+				return;
+		}
+
+		// stop after xxx seconds, email yourself
+		if (areaLength == 0) {
+			// TODO tell the master about it
+			this.workType = WorkType.NO_WORK;
+		}
+        this.self().tell(new WorkShiftMessage(), this.self());
+	}
+
+	private void handle(WorkThiefMessage message) {
+		if (areaLength >= workShiftLength * workShiftStealMultiplyer) {
+			switch (this.workType) {
+				case HINT:
+					long stolenArea = areaLength / 2;
+					this.areaLength -= stolenArea;
+					long stolenNextPermutation = nextPermutation + areaLength;
+					this.sender().tell(new HintWorkMessage(this.alphabet, stolenNextPermutation, stolenArea), this.self());
+					break;
+				case PASSWORD:
+					stolenArea = this.areaLength / 2;
+					this.areaLength -= stolenArea;
+					long stolenNextCombination = nextCombination + areaLength;
+					this.sender().tell(new CrackWorkMessage(this.alphabet, this.passwordLength, this.passwordHash, stolenNextCombination, stolenArea), this.self());
+					break;
+			}
+		}
+	}
+
+	// TODO: Change to better hashing function
 	private String hash(String characters) {
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
