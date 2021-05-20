@@ -93,16 +93,23 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// - If you serialize a message manually and send it, it will, of course, be serialized again by Akka's message passing subsystem.
 		// - But: Good, language-dependent serializers (such as kryo) are aware of byte arrays so that their serialization is very effective w.r.t. serialization time and size of serialized data.
 
-		byte[] serializedMessage = compress(KryoPoolSingleton.get().toBytesWithClass(message));
+		byte[] serializedObject = KryoPoolSingleton.get().toBytesWithClass(message);
+		if (serializedObject != null) {
+			byte[] serializedMessage = compress(serializedObject);
 
-		if (serializedMessage != null) {
-			ByteArrayInputStream serializedStream = new ByteArrayInputStream(serializedMessage);
-			Source<ByteString, CompletionStage<IOResult>> source = StreamConverters.fromInputStream(() -> serializedStream, chunkLength);
-			SourceRef<ByteString> sourceRef = source.runWith(StreamRefs.sourceRef(), this.mat);
-			receiverProxy.tell(new MessageOffer(sourceRef, sender, receiver), this.getSelf());
+			if (serializedMessage != null) {
+				ByteArrayInputStream serializedStream = new ByteArrayInputStream(serializedMessage);
+				Source<ByteString, CompletionStage<IOResult>> source = StreamConverters.fromInputStream(() -> serializedStream, chunkLength);
+				SourceRef<ByteString> sourceRef = source.runWith(StreamRefs.sourceRef(), this.mat);
+				receiverProxy.tell(new MessageOffer(sourceRef, sender, receiver), this.getSelf());
+			} else {
+				this.log().error("Could not compress message.");
+			}
 		} else {
-			this.log().error("Could not compress message.");
+			this.log().error("Could not serialize message.");
 		}
+
+
 	}
 
 	private void handle(MessageOffer messageOffer) {
