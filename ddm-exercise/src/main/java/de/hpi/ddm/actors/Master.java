@@ -2,7 +2,11 @@ package de.hpi.ddm.actors;
 
 import java.io.Serializable;
 import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import java.util.*;
+
+import org.apache.commons.codec.DecoderException;
+import org.apache.commons.codec.binary.Hex;
 
 import akka.actor.*;
 import de.hpi.ddm.structures.BloomFilter;
@@ -31,6 +35,8 @@ public class Master extends AbstractLoggingActor {
 		this.inputBuffer = new ArrayList<>();
 		this.inputDone = false;
 		this.hintHashes = new HashSet<>();
+		this.passwordHashes = new HashSet<>();
+		this.responsibleWorkers = new HashMap<>();
 	}
 
 	////////////////////
@@ -102,6 +108,7 @@ public class Master extends AbstractLoggingActor {
 	private List<String[]> inputBuffer;
 	private Boolean inputDone;
 	HashSet<ByteBuffer> hintHashes;
+	HashSet<ByteBuffer> passwordHashes;
 
 	private HashMap<Address, ActorRef> responsibleWorkers;
 
@@ -199,19 +206,40 @@ public class Master extends AbstractLoggingActor {
 			String name = line[1];
 			String alphabet = line[2];
 			Long len = Long.parseLong(line[3]);
-			String passwordHash = line[4];
-			// TODO: passwordHash and aHintHash to ByteBuffer
+			byte[] passwordHash;
+			try {
+				passwordHash = Hex.decodeHex(line[4]);
+				passwordHashes.add(ByteBuffer.wrap(passwordHash));
+			} catch (DecoderException e) {
+				e.printStackTrace();
+				System.out.println("Failed to parse password hash: " + line[4]);
+			}
 			// TODO: Versionize all of this (we might read multiple batches)
 			for (int i = 5; i < line.length; i++) {
-				String aHintHash = line[i];
+				byte[] aHintHash;
+				try {
+					aHintHash = Hex.decodeHex(line[i]);
+					hintHashes.add(ByteBuffer.wrap(aHintHash));
+				} catch (DecoderException e) {
+					e.printStackTrace();
+					System.out.println("Failed to parse hint hash: " + line[4]);
+				}
 			}
 		}
 	}
 
 	protected void distributeHints() {
 		// Send HashSet to one worker per ActorSystem via LargeMessageProxy. These distribute the HashSet then internally without the LMP?
+		// we need to convert the ByteBuffers (that we need because a hashset of byte[] doesn't wor ) to byte[] (kill me)
+
+		HashSet<byte[]> serializableSet = new HashSet<>();
+		for (ByteBuffer b : this.hintHashes) {
+			serializableSet.add(b.array());
+		}
+
 		for (ActorRef localMaster : this.responsibleWorkers.values()) {
-			this.largeMessageProxy.tell(new LargeMessageProxy.LargeMessage<>(new Worker.HashSetDistributionMessage(this.hintHashes), localMaster), this.self());
+			System.out.println("Telling localMaster " + localMaster.path().toString() + " about the hashes!");
+			this.largeMessageProxy.tell(new LargeMessageProxy.LargeMessage<Worker.HashSetDistributionMessage>(new Worker.HashSetDistributionMessage(serializableSet), localMaster), this.self());
 		}
 	}
 
@@ -263,5 +291,9 @@ public class Master extends AbstractLoggingActor {
 		this.context().unwatch(message.getActor());
 		this.workers.remove(message.getActor());
 		this.log().info("Unregistered {}", message.getActor());
+	}
+
+	public static ByteBuffer str_to_bb(String msg, Charset charset){
+		return ByteBuffer.wrap(msg.getBytes(charset));
 	}
 }

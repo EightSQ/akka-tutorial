@@ -95,10 +95,10 @@ public class Worker extends AbstractLoggingActor {
 		private static final long serialVersionUID = 2039203942748609598L;
 	}
 
-	@Data @AllArgsConstructor
+	@Data @AllArgsConstructor @NoArgsConstructor
 	public static class HashSetDistributionMessage implements Serializable {
 		private static final long serialVersionUID = 2039203942748609598L;
-		HashSet<ByteBuffer> hashes;
+		HashSet<byte[]> hashes;
 	}
 
 	/////////////////
@@ -213,8 +213,13 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(RequestHashSetMessage message) {
+		// TODO: Use LargeMessageProxy here
 		if (this.wantedHashes != null) {
-			this.sender().tell(new HashSetDistributionMessage(this.wantedHashes), this.self());
+			HashSet<byte[]> serializableSet = new HashSet<>();
+			for (ByteBuffer b : this.wantedHashes) {
+				serializableSet.add(b.array());
+			}
+			this.sender().tell(new HashSetDistributionMessage(serializableSet), this.self());
 		} else {
 			this.context().system().scheduler().scheduleOnce(
 				Duration.ofMillis(100), this.self(), message, this.context().system().dispatcher(), this.sender()
@@ -223,7 +228,14 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(HashSetDistributionMessage message) {
-		this.wantedHashes = message.getHashes();
+		System.out.println("Received HashSetDistributionMessage!");
+		HashSet<ByteBuffer> byteBufferSet = new HashSet<>();
+		for (byte[] b : message.getHashes()) {
+			byteBufferSet.add(ByteBuffer.wrap(b));
+		}
+
+		this.wantedHashes = byteBufferSet;
+
 		this.self().tell(new WorkShiftMessage(), this.self());
 	}
 
@@ -238,30 +250,31 @@ public class Worker extends AbstractLoggingActor {
 		this.self().tell(new WorkShiftMessage(), this.self());
 	}
 
-	private static final long workShiftLength = 100000; // TODO: Change this to seconds/milliseconds
-	private static final long workShiftStealMultiplyer = 1;
+	private static final long workShiftLength = 1000;
 	private void handle(WorkShiftMessage message) {
-		// TODO do actual cracking work
-		// TODO: while time spent < time budget for shift
-		switch (this.workType) {
-			case HINT:
-				// TODO stuff
-			case PASSWORD:
-				// TODO password cracking
-			case NO_WORK:
-				return;
+		long shiftStart = System.currentTimeMillis();
+
+		while (System.currentTimeMillis() - shiftStart <= workShiftLength) {
+			switch (this.workType) {
+				case HINT:
+					// TODO hint cracking
+				case PASSWORD:
+					// TODO password cracking
+				case NO_WORK:
+					return;
+			}
 		}
 
-		// stop after xxx seconds, email yourself
 		if (areaLength == 0) {
 			// TODO tell the master about it
 			this.workType = WorkType.NO_WORK;
+		} else {
+			this.self().tell(new WorkShiftMessage(), this.self());
 		}
-        this.self().tell(new WorkShiftMessage(), this.self());
 	}
 
 	private void handle(WorkThiefMessage message) {
-		if (areaLength >= workShiftLength * workShiftStealMultiplyer) {
+		if (areaLength >= 1337) { // TODO: Heuristic for work stealing
 			switch (this.workType) {
 				case HINT:
 					long stolenArea = areaLength / 2;
