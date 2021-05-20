@@ -1,8 +1,6 @@
 package de.hpi.ddm.actors;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.Serializable;
+import java.io.*;
 import java.util.concurrent.CompletionStage;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterOutputStream;
@@ -45,8 +43,9 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	}
 
 	@Data @AllArgsConstructor
-	public static class MessageOffer {
-		final SourceRef<ByteString> sourceRef;
+	public static class MessageOffer implements Serializable {
+		private static final long serialVersionUID = 2940665245810221108L;
+		private SourceRef<ByteString> sourceRef;
 		private ActorRef sender;
 		private ActorRef receiver;
 	}
