@@ -2,6 +2,7 @@ package de.hpi.ddm.actors;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import akka.actor.AbstractLoggingActor;
@@ -29,7 +30,7 @@ public class Collector extends AbstractLoggingActor {
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class CollectMessage implements Serializable {
 		private static final long serialVersionUID = -102767440935270949L;
-		private String result;
+		private ResultObject resultObject;
 	}
 
 	@Data
@@ -40,8 +41,22 @@ public class Collector extends AbstractLoggingActor {
 	/////////////////
 	// Actor State //
 	/////////////////
-	
-	private List<String> results = new ArrayList<>();
+
+	@Data @AllArgsConstructor
+	public static class ResultObject implements Comparable<ResultObject>, Serializable {
+		@Override
+		public int compareTo(ResultObject o) {
+			int res = this.id - o.id;
+			if (res == 0) {
+				res = this.crackedPassword.compareTo(o.crackedPassword);
+			}
+			return res;
+		}
+
+		private int id;
+		private String crackedPassword;
+	}
+	private List<ResultObject> results = new ArrayList<>();
 	
 	/////////////////////
 	// Actor Lifecycle //
@@ -66,10 +81,11 @@ public class Collector extends AbstractLoggingActor {
 	}
 
 	protected void handle(CollectMessage message) {
-		this.results.add(message.getResult());
+		this.results.add(message.getResultObject());
 	}
 	
 	protected void handle(PrintMessage message) {
-		this.results.forEach(result -> this.log().info("{}", result));
+		Collections.sort(this.results);
+		this.results.forEach(resultObject -> this.log().info("id: {}, password: {}", resultObject.getId(), resultObject.getCrackedPassword()));
 	}
 }

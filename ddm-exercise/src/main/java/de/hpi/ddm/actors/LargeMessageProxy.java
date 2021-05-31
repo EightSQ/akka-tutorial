@@ -92,7 +92,6 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// - To split an object, serialize it into a byte array and then send the byte array range-by-range (tip: try "KryoPoolSingleton.get()").
 		// - If you serialize a message manually and send it, it will, of course, be serialized again by Akka's message passing subsystem.
 		// - But: Good, language-dependent serializers (such as kryo) are aware of byte arrays so that their serialization is very effective w.r.t. serialization time and size of serialized data.
-
 		byte[] serializedObject = KryoPoolSingleton.get().toBytesWithClass(message);
 		if (serializedObject != null) {
 			byte[] serializedMessage = compress(serializedObject);
