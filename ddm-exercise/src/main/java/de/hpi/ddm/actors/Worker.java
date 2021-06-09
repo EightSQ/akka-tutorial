@@ -56,6 +56,12 @@ public class Worker extends AbstractLoggingActor {
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class WelcomeMessage implements Serializable {
 		private static final long serialVersionUID = 8343040942748609598L;
+		private BloomFilter welcomeData;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	public static class MasterInformationMessage implements Serializable {
+		private static final long serialVersionUID = 8343040942748609598L;
 		private ActorRef localMaster;
 	}
 
@@ -169,6 +175,7 @@ public class Worker extends AbstractLoggingActor {
 				.match(WorkThiefMessage.class, this::handle)
 				.match(RequestHashSetMessage.class, this::handle)
 				.match(HashSetDistributionMessage.class, this::handle)
+				.match(MasterInformationMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -203,6 +210,11 @@ public class Worker extends AbstractLoggingActor {
 	
 	private void handle(WelcomeMessage message) {
 		final long transmissionTime = System.currentTimeMillis() - this.registrationTime;
+		this.log().info("WelcomeMessage with " + message.getWelcomeData().getSizeInMB() + " MB data received in " + transmissionTime + " ms.");
+	}
+
+	private void handle(MasterInformationMessage message) {
+		this.log().info("Received MasterInformationMessage.");
 		this.localMaster = message.getLocalMaster();
 		this.globalMaster = this.getSender();
 	}

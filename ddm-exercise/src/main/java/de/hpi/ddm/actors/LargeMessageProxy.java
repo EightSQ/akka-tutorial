@@ -48,6 +48,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		private SourceRef<ByteString> sourceRef;
 		private ActorRef sender;
 		private ActorRef receiver;
+		private Class cls;
 	}
 
 
@@ -92,7 +93,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// - To split an object, serialize it into a byte array and then send the byte array range-by-range (tip: try "KryoPoolSingleton.get()").
 		// - If you serialize a message manually and send it, it will, of course, be serialized again by Akka's message passing subsystem.
 		// - But: Good, language-dependent serializers (such as kryo) are aware of byte arrays so that their serialization is very effective w.r.t. serialization time and size of serialized data.
-		byte[] serializedObject = KryoPoolSingleton.get().toBytesWithClass(message);
+		byte[] serializedObject = KryoPoolSingleton.get().toBytesWithoutClass(message);
 		if (serializedObject != null) {
 			byte[] serializedMessage = compress(serializedObject);
 
@@ -100,7 +101,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 				ByteArrayInputStream serializedStream = new ByteArrayInputStream(serializedMessage);
 				Source<ByteString, CompletionStage<IOResult>> source = StreamConverters.fromInputStream(() -> serializedStream, chunkLength);
 				SourceRef<ByteString> sourceRef = source.runWith(StreamRefs.sourceRef(), this.mat);
-				receiverProxy.tell(new MessageOffer(sourceRef, sender, receiver), this.getSelf());
+				receiverProxy.tell(new MessageOffer(sourceRef, sender, receiver,  largeMessage.getMessage().getClass()), this.getSelf());
 			} else {
 				this.log().error("Could not compress message.");
 			}
@@ -125,10 +126,11 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			byte[] decompressedMessage = decompress(byteString.toArray());
 
             if (decompressedMessage != null) {
-				Object unpackedMessage = KryoPoolSingleton.get().fromBytes(decompressedMessage);
+				Object unpackedMessage = KryoPoolSingleton.get().fromBytes(decompressedMessage, messageOffer.getCls());
 
 				// send the unpacked message to the real receiver
 				messageOffer.getReceiver().tell(unpackedMessage, messageOffer.getSender());
+
 			} else {
 				this.log().error("Could not decompress message.");
 			}
@@ -168,6 +170,5 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			return null;
 		}
 	}
-
 
 }
