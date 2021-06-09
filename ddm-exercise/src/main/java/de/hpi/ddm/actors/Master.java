@@ -284,11 +284,11 @@ public class Master extends AbstractLoggingActor {
 	// 4. work stealing (password)
 	// 5. add to workersWaiting
 	protected void handle(RequestWorkMessage message) {
-		System.out.println("Received RequestWorkMessage by worker "+ this.sender().path().toString());
+		//System.out.println("Received RequestWorkMessage by worker "+ this.sender().path().toString());
 		Optional<ActorRef> theftVictim;
 		Boolean workStealingEnabled = true;
 		if (this.openPackages.size() > 0) {
-			System.out.println("Sending open work package by worker "+ this.sender().path().toString());
+			//System.out.println("Sending open work package by worker "+ this.sender().path().toString());
 			WorkPackage pkg = this.openPackages.get(0);
 			this.sender().tell(pkg.createMessage(), this.getSelf());
 			workPackageMap.put(this.sender(), pkg);
@@ -297,7 +297,7 @@ public class Master extends AbstractLoggingActor {
 			//System.out.println("Letting "+ this.sender().path().toString() + " steal from " + theftVictim.get().path().toString());
 			theftVictim.get().tell(new Worker.WorkThiefMessage(), this.sender());
 		} else if (!this.readyPasswordWorkPackages.isEmpty()) {
-			System.out.println("Sending new password work package to worker "+ this.sender().path().toString());
+			//System.out.println("Sending new password work package to worker "+ this.sender().path().toString());
 			PasswordWorkPackage pkg = (PasswordWorkPackage) this.readyPasswordWorkPackages.get(0);
 			this.sender().tell(pkg.createMessage(), this.getSelf());
 			workPackageMap.put(this.sender(), pkg);
@@ -306,8 +306,14 @@ public class Master extends AbstractLoggingActor {
 			//System.out.println("Create a thief of password work: "+ this.sender().path().toString());
 			theftVictim.get().tell(new Worker.WorkThiefMessage(), this.sender());
 		} else if (!this.workersWaiting.contains(this.sender())) {
-			System.out.println("Sending worker "+ this.sender().path().toString() + " to sleep. Sleeping workers: " + (this.workersWaiting.size() + 1) + "/" + this.workers.size());
+			System.out.println("Sending worker "+ this.sender().path().toString() + " to sleep. Sleeping workers: " + (this.workersWaiting.size() + 1) + "/" + this.workers.size() + ", Passwords Done: " + this.passwordsDone + "/" +  this.totalPasswords);
 			this.workersWaiting.add(this.sender());
+
+			/*for (ActorRef worker : this.workers) {
+				if (!this.workersWaiting.contains(worker)) {
+					System.out.println("Worker " + worker.path().toString() + " is still running.");
+				}
+			}*/
 
 			if (this.workersWaiting.size() >= this.workers.size()) {
 				if (this.inputDone) {
@@ -518,7 +524,7 @@ public class Master extends AbstractLoggingActor {
 			}
 
 			ActorRef worker = this.workers.get(i);
-			System.out.println("Worker " + worker.path().toString() + " gets permutations " + nextPermutation + "-" + (nextPermutation+areaLength) + " out of " + maxPermutation);
+			//System.out.println("Worker " + worker.path().toString() + " gets permutations " + nextPermutation + "-" + (nextPermutation+areaLength) + " out of " + maxPermutation);
 
 			HintWorkPackage pkg = new HintWorkPackage(nextPermutation, areaLength, this.alphabet, this.batchNumber);
 

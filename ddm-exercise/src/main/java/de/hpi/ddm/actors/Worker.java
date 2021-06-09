@@ -214,14 +214,14 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(MasterInformationMessage message) {
-		this.log().info("Received MasterInformationMessage.");
+		//this.log().info("Received MasterInformationMessage.");
 		this.localMaster = message.getLocalMaster();
 		this.globalMaster = this.getSender();
 	}
 
 	private void handle(HintWorkMessage message) {
 	    this.requestedWork = false;
-		log("Received HintWorkMessage with alphabet " + message.getAlphabet() +  " and areaLength " + message.getAreaLength() + " from " + this.sender().path().toString());
+		//log("Received HintWorkMessage with alphabet " + message.getAlphabet() +  " and areaLength " + message.getAreaLength() + " from " + this.sender().path().toString());
 		this.workType = WorkType.HINT;
 		this.alphabet = message.getAlphabet();
 		this.areaLength = message.getAreaLength();
@@ -230,7 +230,7 @@ public class Worker extends AbstractLoggingActor {
 		this.intializeHintState();
 
 		if (this.wantedHashesVersion != message.wantedHashesVersion) {
-			log("Requesting hash set from local master.");
+			//log("Requesting hash set from local master.");
 			this.localMaster.tell(new RequestHashSetMessage(message.wantedHashesVersion), this.self());
 		} else {
 			this.self().tell(new WorkShiftMessage(), this.self());
@@ -248,6 +248,8 @@ public class Worker extends AbstractLoggingActor {
 			}
 			this.sender().tell(new HashSetDistributionMessage(serializableSet, message.wantedHashesVersion), this.self());
 		} else {
+			log("The actor " + this.sender().path().toString() + " requested hash set version " + message.wantedHashesVersion + ", but we only have " + this.wantedHashesVersion);
+
 			this.context().system().scheduler().scheduleOnce(
 				Duration.ofMillis(100), this.self(), message, this.context().system().dispatcher(), this.sender()
 			);
@@ -264,10 +266,15 @@ public class Worker extends AbstractLoggingActor {
 		this.wantedHashes = byteBufferSet;
 		this.wantedHashesVersion = message.getWantedHashesVersion();
 
+		if (this.wantedHashesVersion == -1) {
+			log("Warning! We set our wantedHashesVersion to -1.");
+		}
+
 		this.self().tell(new WorkShiftMessage(), this.self());
 	}
 
 	private void handle(CrackWorkMessage message) {
+		//log("Received CrackWorkMessage with alphabet " + message.getAlphabet() +  " and areaLength " + message.getAreaLength() + " from " + this.sender().path().toString());
 		this.requestedWork = false;
 		if (this.areaLength >= 0) {
 			log("This is too much work! I have still work to do! areaLength" + this.areaLength + " " + this.workType.toString());
@@ -329,7 +336,7 @@ public class Worker extends AbstractLoggingActor {
 			try {
 				ByteBuffer hashBuf = ByteBuffer.wrap(Hex.decodeHex(hash));
 				if (hashBuf.equals(this.passwordHash)) { // We discovered a hint
-					log("I cracked a password and send it to the master!");
+					//log("I cracked a password and send it to the master!");
 					this.globalMaster.tell(new Master.PasswordFoundMessage(this.passwordHash.array(), this.combinationState.toString()), this.getSelf());
 					this.areaLength = -1;
 					return;
@@ -388,14 +395,14 @@ public class Worker extends AbstractLoggingActor {
 	public static final long MINIMUM_WORK_SPLITTABLE = 50000; // TODO: Relative Heuristic for work stealing
 
 	private void handle(WorkThiefMessage message) {
-		if (this.areaLength > 1) {
+		if (this.areaLength > 1 && this.workType != WorkType.NO_WORK) {
 			long stolenArea = areaLength / 2;
 			this.areaLength -= stolenArea;
 
 			switch (this.workType) {
 				case HINT:
 					long stolenNextPermutation = nextPermutation + this.areaLength;
-					log("Some work of " + stolenArea + " is stolen from me from " + this.sender().path().toString() + ". My remaining area is " + this.areaLength);
+					//log("Some work of " + stolenArea + " is stolen from me from " + this.sender().path().toString() + ". My remaining area is " + this.areaLength);
 					this.sender().tell(new HintWorkMessage(this.alphabet, stolenNextPermutation, stolenArea, this.wantedHashesVersion), this.self());
 					break;
 				case PASSWORD:
@@ -414,7 +421,6 @@ public class Worker extends AbstractLoggingActor {
 		return DigestUtils.sha256Hex(characters);
 	}
 
-	// TODO: Change to better hashing function
 	private String hash(String characters) {
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
