@@ -316,10 +316,10 @@ public class Master extends AbstractLoggingActor {
 			}*/
 
 			if (this.workersWaiting.size() >= this.workers.size()) {
-				if (this.inputDone) {
+				if (this.inputDone && this.passwordsDone == this.totalPasswords) {
 					this.terminate();
 				} else {
-					if (this.passwordsDone != this.totalPasswords) {
+					if (this.inputDone && this.passwordsDone < this.totalPasswords) {
 						System.err.println("We have a problem, all workers sleep, but we're not done with our batch. Terminating anyways.");
 						this.terminate();
 					} else {
@@ -417,7 +417,7 @@ public class Master extends AbstractLoggingActor {
 				Collector.ResultObject res = new Collector.ResultObject(id, message.getPassword());
 				this.collector.tell(new Collector.CollectMessage(res), this.getSelf());
 			}
-			System.out.println("We cracked a password! Hash: " + Hex.encodeHexString(message.shaHash) + " Solution: " + message.getPassword());
+			//System.out.println("We cracked a password! Hash: " + Hex.encodeHexString(message.shaHash) + " Solution: " + message.getPassword());
 			this.foundPasswords.add(passwordHash);
 
 		} else {
@@ -579,16 +579,16 @@ public class Master extends AbstractLoggingActor {
 		// Assign some work to registering workers if processing of the global task might have already started.
 
 		if (this.crackingStarted) {
-			this.workersWaiting.add(this.sender());
-			this.notifyAllWaitingWorkers();
-
-			HashSet<byte[]> serializableSet = new HashSet<>();
-			for (ByteBuffer b : this.hintHashes) {
-				serializableSet.add(b.array());
-			}
-
 			if (this.sender() == localMaster) {
+				HashSet<byte[]> serializableSet = new HashSet<>();
+				for (ByteBuffer b : this.hintHashes) {
+					serializableSet.add(b.array());
+				}
+
 				this.largeMessageProxy.tell(new LargeMessageProxy.LargeMessage<Worker.HashSetDistributionMessage>(new Worker.HashSetDistributionMessage(serializableSet, this.batchNumber), localMaster), this.self());
+			} else {
+				this.workersWaiting.add(this.sender());
+				this.notifyAllWaitingWorkers();
 			}
 		}
 	}

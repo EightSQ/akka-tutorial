@@ -220,8 +220,12 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(HintWorkMessage message) {
-	    this.requestedWork = false;
-		//log("Received HintWorkMessage with alphabet " + message.getAlphabet() +  " and areaLength " + message.getAreaLength() + " from " + this.sender().path().toString());
+		if (this.areaLength > 0) {
+			log("This is too much work! I have still work to do! areaLength" + this.areaLength + " " + this.workType.toString());
+		}
+
+		this.requestedWork = false;
+		//log("Received HintWorkMessage with alphabet " + message.getAlphabet() +  " and areaLength " + message.getAreaLength() +  " and nextPermutation " + message.getNextPermutation() +  " from " + this.sender().path().toString());
 		this.workType = WorkType.HINT;
 		this.alphabet = message.getAlphabet();
 		this.areaLength = message.getAreaLength();
@@ -269,6 +273,10 @@ public class Worker extends AbstractLoggingActor {
 		if (this.wantedHashesVersion == -1) {
 			log("Warning! We set our wantedHashesVersion to -1.");
 		}
+
+		/*for (ByteBuffer hash : this.wantedHashes) {
+			System.out.println("We are looking for the hash " + Hex.encodeHexString(hash.array()));
+		}*/
 
 		this.self().tell(new WorkShiftMessage(), this.self());
 	}
@@ -321,6 +329,7 @@ public class Worker extends AbstractLoggingActor {
 			try {
 				ByteBuffer hashBuf = ByteBuffer.wrap(Hex.decodeHex(hash));
 				if (this.wantedHashes.contains(hashBuf)) { // We discovered a hint
+					//log("Worker cracked a hint!");
 					this.globalMaster.tell(new Master.HintFoundMessage(hashBuf.array(), this.permutationState.charAt(0)), this.getSelf());
 				}
 			} catch (DecoderException e) {
@@ -396,13 +405,13 @@ public class Worker extends AbstractLoggingActor {
 
 	private void handle(WorkThiefMessage message) {
 		if (this.areaLength > 1 && this.workType != WorkType.NO_WORK) {
-			long stolenArea = areaLength / 2;
+			long stolenArea = this.areaLength / 2 + 1;
 			this.areaLength -= stolenArea;
 
 			switch (this.workType) {
 				case HINT:
-					long stolenNextPermutation = nextPermutation + this.areaLength;
-					//log("Some work of " + stolenArea + " is stolen from me from " + this.sender().path().toString() + ". My remaining area is " + this.areaLength);
+					long stolenNextPermutation = this.nextPermutation + stolenArea - 1;
+					//log("Some work of " + stolenArea + " is stolen from me from " + this.sender().path().toString() + ". My remaining area is " + this.areaLength + ", starting at " + this.nextPermutation);
 					this.sender().tell(new HintWorkMessage(this.alphabet, stolenNextPermutation, stolenArea, this.wantedHashesVersion), this.self());
 					break;
 				case PASSWORD:
