@@ -269,13 +269,18 @@ public class Master extends AbstractLoggingActor {
 
 
 	Optional<ActorRef> findWorkTheftVictim(Worker.WorkType workType) {
+		List<ActorRef> victims = new ArrayList<>();
 		for (Map.Entry<ActorRef, WorkPackage> workShift : this.workPackageMap.entrySet()) {
 			WorkPackage workPackage = workShift.getValue();
 			if (workPackage.getType() == workType && workPackage.getAreaLeft() > Worker.MINIMUM_WORK_SPLITTABLE) {
-				return Optional.of(workShift.getKey());
+				victims.add(workShift.getKey());
+				//return Optional.of(workShift.getKey());
 			}
 		}
-		return Optional.empty();
+
+		if (victims.isEmpty()) return Optional.empty();
+
+		return Optional.of(victims.get(new Random().nextInt(victims.size())));
 	}
 
 	// 1. open packages from terminated workers (hint or password)
@@ -337,6 +342,12 @@ public class Master extends AbstractLoggingActor {
 	private void preparePasswordForCracking(ByteBuffer passwordHash) {
 		String passwordAlphabet = this.alphabet;
 		this.passwordsInHintCracking--;
+
+		if (this.passwordsInHintCracking == 0) {
+			long executionTime = System.currentTimeMillis() - this.startTime;
+			this.log().info("Hintcracking took {} ms", executionTime);
+		}
+
 		for (ByteBuffer hintHash : passwordHintMap.get(passwordHash)) {
 			Character hint = crackedHints.get(hintHash);
 			if (hint != null) {
@@ -396,7 +407,7 @@ public class Master extends AbstractLoggingActor {
 				//System.out.println("We cracked a hint! Hash: " + Hex.encodeHexString(passwordHash.array()) + " Solution: " + message.getHint() + " Progress: " + passwordProgress.get(passwordHash));
 			}
 		} else {
-			//System.out.println("We already cracked the hint! Hash: " + Hex.encodeHexString(message.getShaHash()) + " Solution: " + message.getHint() + " Old Solution: " + this.crackedHints.get(ByteBuffer.wrap(message.getShaHash())));
+			System.out.println("We already cracked the hint! Hash: " + Hex.encodeHexString(message.getShaHash()) + " Solution: " + message.getHint() + " Old Solution: " + this.crackedHints.get(ByteBuffer.wrap(message.getShaHash())));
 		}
 		this.printProgress();
 

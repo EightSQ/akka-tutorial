@@ -366,7 +366,7 @@ public class Worker extends AbstractLoggingActor {
 		}
 	}
 
-	private static final long workShiftLength = 3000;
+	private static final long workShiftLength = 1000;
 	private void handle(WorkShiftMessage message) {
 		long shiftStart = System.currentTimeMillis();
 		//log("Starting shift, remaining areaLength: " + areaLength);
@@ -388,9 +388,13 @@ public class Worker extends AbstractLoggingActor {
 
 		long areaLengthBeforeShift = this.areaLength;
 		while (System.currentTimeMillis() - shiftStart <= workShiftLength && areaLength >= 0) {
-			this.workStep();
+			for (int i = 0; i < 3000 && areaLength >= 0; i++) {
+				this.workStep();
+			}
 		}
-		this.hashesPerSecond = (areaLengthBeforeShift - areaLength) / (1000 * workShiftLength);
+		double hps = (areaLengthBeforeShift - areaLength) / ((System.currentTimeMillis() - shiftStart + 1.0f) / 1000.0f);
+		log("HPS: " + hps + " (" + this.workType + ")") ;
+		this.hashesPerSecond = (long) hps;
 		if (areaLength == -1) {
 			if (this.workType == WorkType.HINT) {
 				this.globalMaster.tell(new Master.NowWorkingOnMessage(new Master.HintWorkPackage(this.nextPermutation, 0, this.alphabet, this.wantedHashesVersion), this.hashesPerSecond), this.self());
@@ -418,7 +422,7 @@ public class Worker extends AbstractLoggingActor {
 					this.sender().tell(new HintWorkMessage(this.alphabet, stolenNextPermutation, stolenArea, this.wantedHashesVersion), this.self());
 					break;
 				case PASSWORD:
-					long stolenNextCombination = nextCombination + this.areaLength;
+					long stolenNextCombination = this.nextCombination + stolenArea - 1;
 					this.sender().tell(new CrackWorkMessage(this.alphabet, this.passwordLength, this.passwordHash.array(), stolenNextCombination, stolenArea), this.self());
 					break;
 			}
