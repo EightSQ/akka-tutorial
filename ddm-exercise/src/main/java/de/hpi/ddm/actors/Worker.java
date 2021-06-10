@@ -251,12 +251,15 @@ public class Worker extends AbstractLoggingActor {
 				serializableSet.add(b.array());
 			}
 			this.sender().tell(new HashSetDistributionMessage(serializableSet, message.wantedHashesVersion), this.self());
-		} else {
+		} else if (this.wantedHashesVersion < message.wantedHashesVersion) {
 			log("The actor " + this.sender().path().toString() + " requested hash set version " + message.wantedHashesVersion + ", but we only have " + this.wantedHashesVersion);
 
 			this.context().system().scheduler().scheduleOnce(
 				Duration.ofMillis(100), this.self(), message, this.context().system().dispatcher(), this.sender()
 			);
+		} else {
+			log("The actor " + this.sender().path().toString() + " requested hash set version " + message.wantedHashesVersion + ", which is too old. He's L O S T.");
+			this.sender().tell(PoisonPill.getInstance(), ActorRef.noSender());
 		}
 	}
 
@@ -404,7 +407,7 @@ public class Worker extends AbstractLoggingActor {
 	public static final long MINIMUM_WORK_SPLITTABLE = 50000; // TODO: Relative Heuristic for work stealing
 
 	private void handle(WorkThiefMessage message) {
-		if (this.areaLength > 1 && this.workType != WorkType.NO_WORK) {
+		if (this.areaLength > 1 && this.wantedHashesVersion > -1) {
 			long stolenArea = this.areaLength / 2 + 1;
 			this.areaLength -= stolenArea;
 
