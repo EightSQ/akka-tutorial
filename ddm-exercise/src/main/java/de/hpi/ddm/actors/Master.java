@@ -581,8 +581,16 @@ public class Master extends AbstractLoggingActor {
 		if (this.crackingStarted) {
 			this.workersWaiting.add(this.sender());
 			this.notifyAllWaitingWorkers();
-		}
 
+			HashSet<byte[]> serializableSet = new HashSet<>();
+			for (ByteBuffer b : this.hintHashes) {
+				serializableSet.add(b.array());
+			}
+
+			if (this.sender() == localMaster) {
+				this.largeMessageProxy.tell(new LargeMessageProxy.LargeMessage<Worker.HashSetDistributionMessage>(new Worker.HashSetDistributionMessage(serializableSet, this.batchNumber), localMaster), this.self());
+			}
+		}
 	}
 
 	private void notifyAllWaitingWorkers() {
