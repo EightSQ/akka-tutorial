@@ -366,7 +366,7 @@ public class Worker extends AbstractLoggingActor {
 		}
 	}
 
-	private static final long workShiftLength = 1000;
+	private static final long workShiftLength = 750;
 	private void handle(WorkShiftMessage message) {
 		long shiftStart = System.currentTimeMillis();
 		//log("Starting shift, remaining areaLength: " + areaLength);
@@ -393,7 +393,7 @@ public class Worker extends AbstractLoggingActor {
 			}
 		}
 		double hps = (areaLengthBeforeShift - areaLength) / ((System.currentTimeMillis() - shiftStart + 1.0f) / 1000.0f);
-		log("HPS: " + hps + " (" + this.workType + ")") ;
+		//log("HPS: " + hps + " (" + this.workType + ")") ;
 		this.hashesPerSecond = (long) hps;
 		if (areaLength == -1) {
 			if (this.workType == WorkType.HINT) {
@@ -434,7 +434,9 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private String betterHash(String characters) {
+
 		return DigestUtils.sha256Hex(characters);
+		//return hash(characters);
 	}
 
 	private String hash(String characters) {
