@@ -1,0 +1,1 @@
+Our fat jar was 150 MB, which github does not accept. It was split using unix split, and can be merged using unix cat
